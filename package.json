@@ -1,0 +1,14 @@
+{
+  "name": "secure-2fa",
+  "version": "1.0.0",
+  "description": "Zero-dependency authentication server with every common 2FA type: TOTP, HOTP, SMS OTP, Email OTP, backup codes and magic links.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

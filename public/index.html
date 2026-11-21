@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure Login · 2FA</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>🔐 Secure Login</h1>
+      <p class="muted">Password + every type of 2FA: authenticator app (TOTP), HOTP token, SMS, email, backup codes, magic link.</p>
+    </header>
+
+    <div id="flash" class="flash hidden" role="status"></div>
+
+    <!-- Login / Register -->
+    <section id="view-auth" class="card hidden">
+      <div class="tabs">
+        <button class="tab active" data-tab="login">Log in</button>
+        <button class="tab" data-tab="register">Create account</button>
+        <button class="tab" data-tab="magic">Magic link</button>
+      </div>
+
+      <form id="form-login" data-pane="login">
+        <label>Email <input name="email" type="email" autocomplete="username" required></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Log in</button>
+      </form>
+
+      <form id="form-register" data-pane="register" class="hidden">
+        <label>Email <input name="email" type="email" autocomplete="username" required></label>
+        <label>Password (min 10 characters) <input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+        <button type="submit">Create account</button>
+      </form>
+
+      <form id="form-magic" data-pane="magic" class="hidden">
+        <p class="muted">Get a one-time sign-in link by email. If 2FA is on, you'll still be asked for your second factor.</p>
+        <label>Email <input name="email" type="email" required></label>
+        <button type="submit">Send link</button>
+      </form>
+    </section>
+
+    <!-- 2FA challenge -->
+    <section id="view-mfa" class="card hidden">
+      <h2>Two-factor verification</h2>
+      <p class="muted">Choose how to verify it's you.</p>
+      <div id="mfa-methods" class="method-picker"></div>
+      <form id="form-mfa">
+        <p id="mfa-hint" class="muted"></p>
+        <button type="button" id="btn-send-code" class="secondary hidden">Send code</button>
+        <label>Code <input name="code" id="mfa-code" autocomplete="one-time-code" inputmode="numeric" required></label>
+        <button type="submit">Verify</button>
+        <button type="button" id="btn-cancel-mfa" class="link">Cancel and log in again</button>
+      </form>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="view-dash" class="hidden">
+      <div class="card">
+        <div class="row">
+          <div>
+            <h2>Welcome</h2>
+            <p>Signed in as <strong id="dash-email"></strong></p>
+            <p id="dash-status"></p>
+          </div>
+          <button id="btn-logout" class="secondary">Log out</button>
+        </div>
+      </div>
+
+      <div id="backup-reveal" class="card warn hidden">
+        <h3>Save your backup codes</h3>
+        <p>Each code works once. Store them somewhere safe — they are shown only now.</p>
+        <ol id="backup-list" class="codes"></ol>
+        <button id="btn-copy-backup" class="secondary">Copy codes</button>
+        <button id="btn-hide-backup">I've saved them</button>
+      </div>
+
+      <div class="grid">
+        <!-- TOTP -->
+        <div class="card method" data-method="totp">
+          <h3>📱 Authenticator app <span class="badge"></span></h3>
+          <p class="muted">Google Authenticator, Microsoft Authenticator, Authy, 1Password… (TOTP, 30-second codes)</p>
+          <div class="setup hidden">
+            <div class="qr"></div>
+            <p>Or enter this key manually: <code class="secret"></code></p>
+            <form class="enable-form"><label>6-digit code from the app <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button>Turn on</button></form>
+          </div>
+          <button class="btn-setup">Set up</button>
+          <button class="btn-disable danger hidden">Turn off</button>
+        </div>
+
+        <!-- HOTP -->
+        <div class="card method" data-method="hotp">
+          <h3>🔑 HOTP token <span class="badge"></span></h3>
+          <p class="muted">Counter-based codes (hardware key fobs, or authenticator apps that support HOTP). A new code each time you press the button.</p>
+          <div class="setup hidden">
+            <div class="qr"></div>
+            <p>Key: <code class="secret"></code></p>
+            <form class="enable-form"><label>First code from the token <input name="code" inputmode="numeric" required></label><button>Turn on</button></form>
+          </div>
+          <button class="btn-setup">Set up</button>
+          <button class="btn-disable danger hidden">Turn off</button>
+        </div>
+
+        <!-- SMS -->
+        <div class="card method" data-method="sms">
+          <h3>💬 SMS code <span class="badge"></span></h3>
+          <p class="muted">Get a code by text message. <span class="phone"></span></p>
+          <form class="start-form hidden"><label>Phone (international format) <input name="phone" type="tel" placeholder="+254712345678" required></label><button>Send code</button></form>
+          <form class="enable-form hidden"><label>Code we texted you <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button>Turn on</button></form>
+          <button class="btn-setup">Set up</button>
+          <button class="btn-disable danger hidden">Turn off</button>
+        </div>
+
+        <!-- Email -->
+        <div class="card method" data-method="email">
+          <h3>✉️ Email code <span class="badge"></span></h3>
+          <p class="muted">Get a code sent to your email address.</p>
+          <form class="enable-form hidden"><label>Code we emailed you <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label><button>Turn on</button></form>
+          <button class="btn-setup">Set up</button>
+          <button class="btn-disable danger hidden">Turn off</button>
+        </div>
+
+        <!-- Backup -->
+        <div class="card method" data-method="backup">
+          <h3>🧾 Backup codes <span class="badge"></span></h3>
+          <p class="muted">Single-use recovery codes for when you lose your phone. <span class="remaining"></span></p>
+          <button class="btn-regen">Generate new codes</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dev outbox -->
+    <section id="dev-outbox" class="card dev hidden">
+      <h3>🧪 Dev outbox <span class="muted">(SMS & emails appear here until you configure Twilio / SendGrid)</span></h3>
+      <ul id="outbox-list"></ul>
+    </section>
+  </main>
+</body>
+</html>
