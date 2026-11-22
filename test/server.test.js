@@ -242,4 +242,52 @@ test('serves UI with security headers', async () => {
   assert.match(res.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal(res.headers.get('x-frame-options'), 'DENY');
   assert.equal((await fetch(base + '/../package.json')).status, 404);
+  assert.doesNotMatch(res.headers.get('content-security-policy'), /https?:/);
+});
+
+test('change password: needs current password, signs out other sessions', async () => {
+  const email = 'chpass@example.com';
+  const a = await registerFresh(email);
+  const b = client();
+  await b.post('/api/login', { email, password: PASS });
+  assert.equal((await b.get('/api/me')).data.authenticated, true);
+
+  assert.equal((await a.post('/api/password', { currentPassword: 'wrong', newPassword: 'Another-long-pass1' })).status, 401);
+  assert.equal((await a.post('/api/password', { currentPassword: PASS, newPassword: 'short' })).status, 400);
+  assert.equal((await a.post('/api/password', { currentPassword: PASS, newPassword: 'Another-long-pass1' })).status, 200);
+
+  assert.equal((await a.get('/api/me')).data.authenticated, true);
+  assert.equal((await b.get('/api/me')).data.authenticated, false);
+  assert.equal((await client().post('/api/login', { email, password: PASS })).status, 401);
+  assert.equal((await client().post('/api/login', { email, password: 'Another-long-pass1' })).status, 200);
+});
+
+test('malformed Origin and cookie headers get 4xx, not 500', async () => {
+  const post = (headers) => fetch(base + '/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch', ...headers },
+    body: '{}',
+  });
+  assert.equal((await post({ Origin: 'null' })).status, 403);
+  assert.equal((await post({ Origin: 'https://evil.example' })).status, 403);
+  assert.equal((await post({ Cookie: 'sid=%E0%A4%A' })).status, 401);
+});
+
+test('code sending is rate limited per IP', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mfa-test-'));
+  const limited = createApp({ dataDir: dir, production: false, log: () => {}, rateLimits: { auth: 10_000, global: 10_000, send: 2 } });
+  await new Promise((r) => limited.server.listen(0, r));
+  const url = `http://127.0.0.1:${limited.server.address().port}/api/magic/request`;
+  const send = () => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+    body: JSON.stringify({ email: 'x@example.com' }),
+  });
+  try {
+    assert.equal((await send()).status, 200);
+    assert.equal((await send()).status, 200);
+    assert.equal((await send()).status, 429);
+  } finally {
+    limited.server.close();
+  }
 });

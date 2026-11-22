@@ -1,7 +1,7 @@
 {
   "name": "secure-2fa",
   "version": "1.0.0",
-  "description": "Zero-dependency authentication server with every common 2FA type: TOTP, HOTP, SMS OTP, Email OTP, backup codes and magic links.",
+  "description": "Node.js login server with TOTP, HOTP, SMS, email, backup-code and magic-link two-step verification. No dependencies.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

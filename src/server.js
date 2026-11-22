@@ -1,17 +1,4 @@
 'use strict';
-/**
- * Secure authentication server with every common 2FA type:
- *   1. TOTP  - authenticator apps (Google/Microsoft Authenticator, Authy...)  RFC 6238
- *   2. HOTP  - counter-based hardware/software tokens                         RFC 4226
- *   3. SMS one-time codes
- *   4. Email one-time codes
- *   5. Backup / recovery codes (single use)
- *   6. Magic links (passwordless email login; still requires 2FA if enabled)
- *
- * Hardening: scrypt password hashing, AES-256-GCM encrypted 2FA secrets, hashed codes,
- * code expiry + attempt limits, TOTP replay protection, account lockout, rate limiting,
- * session rotation on privilege change, HttpOnly/SameSite cookies, CSRF checks, security headers.
- */
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -54,7 +41,8 @@ function createApp(opts = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   const production = opts.production ?? process.env.NODE_ENV === 'production';
   const baseUrl = (opts.baseUrl || process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
-  const limits = { auth: 30, global: 300, ...(opts.rateLimits || {}) };
+  const trustProxy = opts.trustProxy ?? process.env.TRUST_PROXY === '1';
+  const limits = { auth: 30, send: 10, global: 300, ...(opts.rateLimits || {}) };
   const log = opts.log ?? console.log;
   const publicDir = path.join(__dirname, '..', 'public');
 
@@ -72,7 +60,6 @@ function createApp(opts = {}) {
   }, 60_000);
   sweeper.unref();
 
-  // ---------------- helpers ----------------
   function rateLimit(key, limit, windowMs = 60_000) {
     const now = Date.now();
     let b = buckets.get(key);
@@ -89,7 +76,12 @@ function createApp(opts = {}) {
     const out = {};
     for (const part of (req.headers.cookie || '').split(';')) {
       const i = part.indexOf('=');
-      if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+      if (i <= 0) continue;
+      try {
+        out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+      } catch {
+        // ignore malformed cookie values
+      }
     }
     return out;
   }
@@ -121,6 +113,10 @@ function createApp(opts = {}) {
     sessions.set(sid, s);
     setCookie(res, sid, ttl);
     return s;
+  }
+
+  function revokeSessions(userId, keepSid) {
+    for (const [sid, s] of sessions) if (s.userId === userId && sid !== keepSid) sessions.delete(sid);
   }
 
   function destroySession(res, s) {
@@ -156,6 +152,12 @@ function createApp(opts = {}) {
     return list;
   }
 
+  function checkPasswordPolicy(password, email) {
+    if (password.length < 10 || password.length > 256) throw new HttpError(400, 'Password must be 10-256 characters.');
+    const name = email.split('@')[0];
+    if (name.length >= 3 && password.toLowerCase().includes(name)) throw new HttpError(400, 'Password must not contain your email name.');
+  }
+
   const maskPhone = (p) => (p ? `${p.slice(0, 3)}${'*'.repeat(Math.max(0, p.length - 5))}${p.slice(-2)}` : null);
   const maskEmail = (e) => e.replace(/^(.)(.*)(@.*)$/, (_, a, b, c) => a + '*'.repeat(Math.min(b.length, 6)) + c);
 
@@ -175,7 +177,7 @@ function createApp(opts = {}) {
     };
   }
 
-  // ----- one-time codes (SMS / email) -----
+  // one-time codes (SMS / email)
   async function sendCode(user, purpose, channel, destination) {
     const prev = user.otps[purpose];
     if (prev && Date.now() - prev.sentAt < CONFIG.otpResendMs) {
@@ -265,7 +267,6 @@ function createApp(opts = {}) {
     return undefined;
   }
 
-  // ---------------- routes ----------------
   // auth: 'none' | 'mfa' (password ok, 2nd factor pending) | 'full'
   const routes = {
     'GET /api/me': {
@@ -284,8 +285,7 @@ function createApp(opts = {}) {
         const email = String(body.email || '').trim().toLowerCase();
         const password = String(body.password || '');
         if (!EMAIL_RE.test(email)) throw new HttpError(400, 'Enter a valid email address.');
-        if (password.length < 10 || password.length > 256) throw new HttpError(400, 'Password must be 10-256 characters.');
-        if (password.toLowerCase().includes(email.split('@')[0])) throw new HttpError(400, 'Password must not contain your email name.');
+        checkPasswordPolicy(password, email);
         if (store.findByEmail(email)) throw new HttpError(409, 'An account with this email already exists.');
         const user = store.addUser(newUser(email, await cu.hashPassword(password)));
         createSession(res, session, user.id, 'full');
@@ -338,10 +338,11 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- second-factor challenge during login -----
+    // Second factor during login
     'POST /api/mfa/challenge/send': {
       auth: 'mfa',
-      handler: async ({ body, user }) => {
+      handler: async ({ body, user, ip }) => {
+        rateLimit(`send:${ip}`, limits.send);
         if (body.method === 'sms' && user.mfa.sms.enabled) await sendCode(user, 'login-sms', 'sms', user.mfa.sms.phone);
         else if (body.method === 'email' && user.mfa.email.enabled) await sendCode(user, 'login-email', 'email', user.email);
         else throw new HttpError(400, 'That method cannot send codes.');
@@ -369,7 +370,7 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- TOTP (authenticator app) -----
+    // TOTP (authenticator app)
     'POST /api/mfa/totp/setup': {
       auth: 'full',
       handler: ({ user }) => {
@@ -394,7 +395,7 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- HOTP (counter-based token) -----
+    // HOTP (counter-based token)
     'POST /api/mfa/hotp/setup': {
       auth: 'full',
       handler: ({ user }) => {
@@ -418,10 +419,11 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- SMS -----
+    // SMS
     'POST /api/mfa/sms/setup': {
       auth: 'full',
-      handler: async ({ user, body }) => {
+      handler: async ({ user, body, ip }) => {
+        rateLimit(`send:${ip}`, limits.send);
         const phone = String(body.phone || '').replace(/[\s()-]/g, '');
         if (!PHONE_RE.test(phone)) throw new HttpError(400, 'Enter the phone number in international format, e.g. +254712345678.');
         user.mfa.sms.pendingPhone = phone;
@@ -442,10 +444,11 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- Email -----
+    // Email
     'POST /api/mfa/email/setup': {
       auth: 'full',
-      handler: async ({ user }) => {
+      handler: async ({ user, ip }) => {
+        rateLimit(`send:${ip}`, limits.send);
         await sendCode(user, 'setup-email', 'email', user.email);
         return { ok: true, sent: true };
       },
@@ -461,7 +464,7 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- Backup codes -----
+    // Backup codes
     'POST /api/mfa/backup/generate': {
       auth: 'full',
       handler: async ({ user, body }) => {
@@ -473,7 +476,23 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- Disable a method (requires password re-authentication) -----
+    'POST /api/password': {
+      auth: 'full',
+      handler: async ({ user, body, res, session, ip }) => {
+        rateLimit(`auth:${ip}`, limits.auth);
+        if (!(await cu.verifyPassword(user.passwordHash, String(body.currentPassword || '')))) throw new HttpError(401, 'Current password is incorrect.');
+        const next = String(body.newPassword || '');
+        checkPasswordPolicy(next, user.email);
+        user.passwordHash = await cu.hashPassword(next);
+        store.save();
+        // Sign out every other session for this account.
+        const fresh = createSession(res, session, user.id, 'full');
+        revokeSessions(user.id, fresh.sid);
+        return { ok: true };
+      },
+    },
+
+    // Turning a method off requires the password again
     'POST /api/mfa/disable': {
       auth: 'full',
       handler: async ({ user, body }) => {
@@ -490,11 +509,11 @@ function createApp(opts = {}) {
       },
     },
 
-    // ----- Magic link (passwordless first factor) -----
+    // Magic link (passwordless first factor)
     'POST /api/magic/request': {
       auth: 'none',
       handler: async ({ body, ip }) => {
-        rateLimit(`auth:${ip}`, limits.auth);
+        rateLimit(`send:${ip}`, limits.send);
         const email = String(body.email || '').trim().toLowerCase();
         const user = EMAIL_RE.test(email) ? store.findByEmail(email) : null;
         if (user && !(user.magic && Date.now() - user.magic.sentAt < CONFIG.otpResendMs)) {
@@ -538,9 +557,8 @@ function createApp(opts = {}) {
     routes['GET /api/dev/outbox'] = { auth: 'none', handler: () => ({ messages: notifier.outbox }) };
   }
 
-  // ---------------- request pipeline ----------------
   function securityHeaders(res) {
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -590,10 +608,26 @@ function createApp(opts = {}) {
     fs.createReadStream(file).pipe(res);
   }
 
+  function originHost(origin) {
+    try {
+      return new URL(origin).host;
+    } catch {
+      return null;
+    }
+  }
+
+  function clientIp(req) {
+    if (trustProxy) {
+      const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+      if (forwarded) return forwarded;
+    }
+    return req.socket.remoteAddress || 'unknown';
+  }
+
   async function handle(req, res) {
     securityHeaders(res);
     const url = new URL(req.url, 'http://localhost');
-    const ip = req.socket.remoteAddress || 'unknown';
+    const ip = clientIp(req);
     try {
       rateLimit(`global:${ip}`, limits.global);
       const route = routes[`${req.method} ${url.pathname}`];
@@ -604,10 +638,10 @@ function createApp(opts = {}) {
 
       let body = {};
       if (req.method !== 'GET') {
-        // CSRF defence (in addition to SameSite=Strict cookies)
+        // CSRF: custom header + Origin check, on top of SameSite=Strict cookies
         if (req.headers['x-requested-with'] !== 'fetch') throw new HttpError(403, 'Missing CSRF header.');
         const origin = req.headers.origin;
-        if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, 'Cross-origin request blocked.');
+        if (origin !== undefined && originHost(origin) !== req.headers.host) throw new HttpError(403, 'Cross-origin request blocked.');
         if (!/^application\/json/i.test(req.headers['content-type'] || '')) throw new HttpError(415, 'Use application/json.');
         body = await readJson(req);
       }
@@ -638,7 +672,7 @@ if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
   const { server } = createApp();
   server.listen(port, () => {
-    console.log(`Secure 2FA server running at http://localhost:${port}`);
+    console.log(`Listening on http://localhost:${port}`);
     if (process.env.NODE_ENV !== 'production') console.log('Dev mode: SMS/email codes are printed here and shown in the page\'s Dev Outbox.');
   });
 }

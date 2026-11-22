@@ -43,7 +43,6 @@ function guard(fn) {
 
 const formData = (form) => Object.fromEntries(new FormData(form));
 
-// ---------------- Auth view ----------------
 $$('.tab').forEach((t) => t.addEventListener('click', () => {
   $$('.tab').forEach((x) => x.classList.toggle('active', x === t));
   $$('[data-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== t.dataset.tab));
@@ -58,7 +57,7 @@ $('#form-login').addEventListener('submit', guard(async (e) => {
 $('#form-register').addEventListener('submit', guard(async (e) => {
   const r = await api('/api/register', formData(e.target));
   e.target.reset();
-  flash('Account created. Now turn on two-factor authentication below.');
+  flash('Account created. Turn on at least one verification method.');
   renderDash(r.user);
 }));
 
@@ -67,8 +66,7 @@ $('#form-magic').addEventListener('submit', guard(async (e) => {
   flash(r.message);
 }));
 
-// ---------------- MFA challenge ----------------
-const METHOD_LABELS = { totp: 'Authenticator app', hotp: 'HOTP token', sms: 'SMS', email: 'Email', backup: 'Backup code' };
+const METHOD_LABELS = { totp: 'Authenticator app', hotp: 'Hardware token', sms: 'Text message', email: 'Email', backup: 'Backup code' };
 let mfaState = null;
 
 function showMfa(info) {
@@ -90,11 +88,11 @@ function selectMfa(m) {
   mfaState.method = m;
   $$('#mfa-methods button').forEach((b) => b.classList.toggle('active', b.dataset.m === m));
   const hints = {
-    totp: 'Open your authenticator app and enter the current 6-digit code.',
+    totp: 'Enter the 6-digit code from your authenticator app.',
     hotp: 'Press the button on your token and enter the code.',
-    sms: `We'll text a code to ${mfaState.smsPhone || 'your phone'}.`,
-    email: `We'll email a code to ${mfaState.email || 'your email'}.`,
-    backup: 'Enter one of your backup codes (e.g. abcd-efgh). Each works once.',
+    sms: `Send a code to ${mfaState.smsPhone || 'your phone'}.`,
+    email: `Send a code to ${mfaState.email || 'your email'}.`,
+    backup: 'Enter one of your backup codes, e.g. abcd-efgh.',
   };
   $('#mfa-hint').textContent = hints[m];
   $('#btn-send-code').classList.toggle('hidden', !(m === 'sms' || m === 'email'));
@@ -122,18 +120,21 @@ $('#form-mfa').addEventListener('submit', guard(async (e) => {
 
 $('#btn-cancel-mfa').addEventListener('click', guard(async () => { await api('/api/logout', {}); await refresh(); }));
 
-// ---------------- Dashboard ----------------
 let currentUser = null;
 
 function renderDash(user) {
   currentUser = user;
   $('#dash-email').textContent = user.email;
-  $('#dash-status').textContent = user.mfaEnabled ? '✅ Two-factor authentication is ON.' : '⚠️ Two-factor authentication is OFF. Turn on at least one method.';
+  const status = $('#dash-status');
+  status.textContent = user.mfaEnabled
+    ? 'Two-step verification is on.'
+    : 'Two-step verification is off. Your account is protected by your password only.';
+  status.className = `status ${user.mfaEnabled ? 'on' : 'off'}`;
   for (const card of $$('.method')) {
     const m = card.dataset.method;
     const on = m === 'backup' ? user.mfa.backupCodesRemaining > 0 : user.mfa[m];
     const badge = $('.badge', card);
-    badge.textContent = on ? 'ON' : 'OFF';
+    badge.textContent = on ? 'On' : '';
     badge.className = `badge ${on ? 'on' : 'off'}`;
     $('.btn-setup', card)?.classList.toggle('hidden', on);
     $('.btn-disable', card)?.classList.toggle('hidden', !on);
@@ -160,7 +161,7 @@ $('#btn-copy-backup').addEventListener('click', guard(async () => {
 function drawQr(el, text) {
   el.replaceChildren();
   if (window.QRCode) new window.QRCode(el, { text, width: 180, height: 180 });
-  else el.textContent = '(QR library unavailable offline — use the key below)';
+  else el.textContent = 'QR code unavailable. Use the key below.';
 }
 
 function onEnabled(r, label) {
@@ -216,11 +217,33 @@ for (const kind of ['totp', 'hotp']) {
   }));
 }
 
-// Disable buttons (password re-auth)
+/** Asks for the password in a modal dialog. Resolves to the password, or null if cancelled. */
+function askPassword(title) {
+  const dialog = $('#confirm-dialog');
+  const form = $('#confirm-form');
+  $('#confirm-title').textContent = title;
+  form.reset();
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      form.removeEventListener('submit', onSubmit);
+      $('#confirm-cancel').removeEventListener('click', onCancel);
+      dialog.removeEventListener('cancel', onCancel);
+      dialog.close();
+      resolve(value);
+    };
+    const onSubmit = (e) => { e.preventDefault(); finish(form.password.value); };
+    const onCancel = (e) => { e.preventDefault(); finish(null); };
+    form.addEventListener('submit', onSubmit);
+    $('#confirm-cancel').addEventListener('click', onCancel);
+    dialog.addEventListener('cancel', onCancel);
+    dialog.showModal();
+  });
+}
+
 for (const btn of $$('.btn-disable')) {
   btn.addEventListener('click', guard(async () => {
     const method = btn.closest('.method').dataset.method;
-    const password = window.prompt(`Enter your password to turn off ${METHOD_LABELS[method]}:`);
+    const password = await askPassword(`Turn off ${METHOD_LABELS[method].toLowerCase()}`);
     if (!password) return;
     const r = await api('/api/mfa/disable', { method, password });
     flash(`${METHOD_LABELS[method]} turned off.`);
@@ -228,23 +251,27 @@ for (const btn of $$('.btn-disable')) {
   }));
 }
 
-// Regenerate backup codes
 $('.btn-regen').addEventListener('click', guard(async () => {
-  const password = window.prompt('Enter your password to generate new backup codes (old ones stop working):');
+  const password = await askPassword('Regenerate backup codes');
   if (!password) return;
   const r = await api('/api/mfa/backup/generate', { password });
   renderDash(r.user);
   showBackupCodes(r.backupCodes);
 }));
 
+$('#form-password').addEventListener('submit', guard(async (e) => {
+  await api('/api/password', formData(e.target));
+  e.target.reset();
+  flash('Password updated. Other sessions were signed out.');
+}));
+
 $('#btn-logout').addEventListener('click', guard(async () => {
   await api('/api/logout', {});
   currentUser = null;
-  flash('Logged out.');
+  flash('Signed out.');
   await refresh();
 }));
 
-// ---------------- Dev outbox ----------------
 async function pollOutbox() {
   try {
     const r = await api('/api/dev/outbox');
@@ -261,11 +288,12 @@ async function pollOutbox() {
       li.append(head, time, text);
       return li;
     }));
-  } catch { /* outbox disabled in production */ }
+  } catch {
+    // outbox is disabled in production
+  }
 }
 setInterval(pollOutbox, 3000);
 
-// ---------------- Boot ----------------
 async function refresh() {
   const me = await api('/api/me');
   if (me.authenticated) renderDash(me.user);
