@@ -119,8 +119,8 @@ button:disabled { opacity: .5; cursor: wait; }
 .flash.error { border-color: var(--danger); color: var(--danger); }
 .flash.ok { border-color: var(--ok); color: var(--ok); }
 
-.badge { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; margin-left: 6px; vertical-align: 1px; }
-.badge.on { background: var(--ok); color: var(--card); }
+.badge { font-size: 13px; font-weight: 600; margin-left: 6px; }
+.badge.on { color: var(--ok); }
 .badge.off { display: none; }
 
 .qr { margin: 4px 0 8px; }
@@ -129,6 +129,9 @@ code { font-family: ui-monospace, Consolas, monospace; word-break: break-all; ba
 .codes { columns: 2; font-family: ui-monospace, Consolas, monospace; font-size: 15px; padding-left: 24px; }
 
 #outbox-list { list-style: none; padding: 0; margin: 8px 0 0; max-height: 240px; overflow: auto; font-size: 14px; }
+.pre { white-space: pre-wrap; }
+.passkeys { margin: 6px 0 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
+.passkeys:empty { display: none; }
 #outbox-list li { padding: 8px 0; border-top: 1px solid var(--border); word-break: break-word; }
 
 dialog {

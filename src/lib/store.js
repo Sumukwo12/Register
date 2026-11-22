@@ -30,6 +30,15 @@ class Store {
     return Object.values(this.data.users).find(predicate) || null;
   }
 
+  deleteUser(id) {
+    delete this.data.users[id];
+    this.save();
+  }
+
+  allUsers() {
+    return Object.values(this.data.users);
+  }
+
   addUser(user) {
     this.data.users[user.id] = user;
     this.save();

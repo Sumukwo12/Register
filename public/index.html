@@ -39,15 +39,36 @@
       </form>
     </section>
 
+    <section id="view-verify" class="card narrow hidden">
+      <h1>Check your email</h1>
+      <p class="muted">We sent a 6-digit code to <strong id="verify-email"></strong>. Enter it to finish creating your account.</p>
+      <form id="form-verify">
+        <label>Code <input name="code" autocomplete="one-time-code" inputmode="numeric" required></label>
+        <button type="submit">Confirm email</button>
+        <button type="button" id="btn-resend" class="secondary">Resend code</button>
+        <button type="button" class="link btn-cancel">Cancel</button>
+      </form>
+    </section>
+
+    <section id="view-magic" class="card narrow hidden">
+      <h1>Finish signing in</h1>
+      <p class="muted">You opened a sign-in link. Continue to sign in on this device.</p>
+      <button id="btn-magic-continue">Continue</button>
+      <button type="button" class="link btn-cancel">Cancel</button>
+    </section>
+
     <section id="view-mfa" class="card narrow hidden">
       <h1>Two-step verification</h1>
       <div id="mfa-methods" class="segmented"></div>
       <form id="form-mfa">
         <p id="mfa-hint" class="muted"></p>
         <button type="button" id="btn-send-code" class="secondary hidden">Send code</button>
-        <label>Code <input name="code" id="mfa-code" autocomplete="one-time-code" inputmode="numeric" required></label>
-        <button type="submit">Verify</button>
-        <button type="button" id="btn-cancel-mfa" class="link">Cancel</button>
+        <button type="button" id="btn-passkey" class="hidden">Use passkey</button>
+        <div id="mfa-code-fields">
+          <label>Code <input name="code" id="mfa-code" autocomplete="one-time-code" inputmode="numeric"></label>
+          <button type="submit">Verify</button>
+        </div>
+        <button type="button" class="link btn-cancel">Cancel</button>
       </form>
     </section>
 
@@ -57,7 +78,10 @@
           <h1>Security settings</h1>
           <p class="muted">Signed in as <strong id="dash-email"></strong></p>
         </div>
-        <button id="btn-logout" class="secondary">Sign out</button>
+        <div class="actions">
+          <button id="btn-revoke" class="secondary">Sign out other devices</button>
+          <button id="btn-logout" class="secondary">Sign out</button>
+        </div>
       </header>
 
       <p id="dash-status" class="status"></p>
@@ -71,6 +95,20 @@
       </div>
 
       <div class="card list">
+        <div class="item method" data-method="passkey">
+          <div class="item-head">
+            <div>
+              <h2>Passkey <span class="badge"></span></h2>
+              <p class="muted">Fingerprint, face, device PIN or security key. Can't be phished. Recommended.</p>
+              <ul class="passkeys"></ul>
+            </div>
+            <div class="actions">
+              <button class="btn-setup secondary">Add passkey</button>
+              <button class="btn-disable danger hidden">Remove all</button>
+            </div>
+          </div>
+        </div>
+
         <div class="item method" data-method="totp">
           <div class="item-head">
             <div>
@@ -111,7 +149,7 @@
           <div class="item-head">
             <div>
               <h2>Text message <span class="badge"></span></h2>
-              <p class="muted">Codes sent by SMS. <span class="phone"></span></p>
+              <p class="muted">Codes sent by SMS. The weakest option: a stolen phone number gets the codes. <span class="phone"></span></p>
             </div>
             <div class="actions">
               <button class="btn-setup secondary">Set up</button>

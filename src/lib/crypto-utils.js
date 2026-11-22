@@ -98,7 +98,28 @@ function normalizeBackupCode(code) {
   return String(code).toLowerCase().replace(/[\s-]/g, '');
 }
 
+// ---------- Breached passwords ----------
+/**
+ * How many times a password appears in the Have I Been Pwned breach corpus.
+ * Uses the k-anonymity range API: only the first 5 hex chars of the SHA-1 leave this machine.
+ */
+async function pwnedPasswordCount(password) {
+  const hash = crypto.createHash('sha1').update(password).digest('hex').toUpperCase();
+  const res = await fetch(`https://api.pwnedpasswords.com/range/${hash.slice(0, 5)}`, {
+    headers: { 'Add-Padding': 'true', 'User-Agent': 'secure-2fa' },
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!res.ok) throw new Error(`HIBP returned ${res.status}`);
+  const suffix = hash.slice(5);
+  for (const line of (await res.text()).split('\n')) {
+    const [h, count] = line.trim().split(':');
+    if (h === suffix) return Number(count);
+  }
+  return 0;
+}
+
 module.exports = {
+  pwnedPasswordCount,
   hashPassword,
   verifyPassword,
   loadMasterKey,
